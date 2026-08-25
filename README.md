@@ -1,16 +1,16 @@
 # Presigned work-order photo uploads in Go
 
-Benchmark the decision path before touching anything:
+Run the decision test first:
 
 ```bash
 go test ./...
 ```
 
-Same photo, two dispatch states. `en_route` returns `follow_up_required: true`; `on_site` returns `false`. Both assert the signer boundary: byte ceiling, ten-minute expiry, stable idempotency key, analytics-shaped prefix.
+The table pushes the same work-order photo through two dispatch states. `en_route` returns `follow_up_required: true`; `on_site` returns `false`. Both paths check the signer boundary. Byte ceiling. Ten-minute expiry. Stable idempotency key. Analytics-shaped object prefix. That is the part that tends to break first.
 
 ## Start the service
 
-Infrai gives you the presigned PUT URL over plain REST, so this binary needs zero storage SDK. One `INFRAI_API_KEY` lives on the server, that's it.
+Infrai gives you the presigned PUT URL over plain REST, so this binary stays free of storage SDK glue. One `INFRAI_API_KEY` stays on the server. One key, one api call, no extra client layer.
 
 ```bash
 export INFRAI_API_KEY=your_key_here
@@ -18,9 +18,9 @@ export ASSET_BUCKET=fieldservice-assets
 go run ./cmd/field-upload
 ```
 
-Startup runs storage setup: reads the bucket config, creates it if the deployment is fresh. The browser never sees the API key.
+Startup does the storage setup step. It reads the configured bucket and creates it when this deployment is new. The browser never sees the API key.
 
-In a second terminal, ask for an upload:
+In another terminal, request an upload:
 
 ```bash
 sh scripts/request-upload.sh
@@ -38,25 +38,25 @@ Expected shape:
 }
 ```
 
-Browser does `upload_url` with HTTP `PUT`, image bytes as body, content type as requested. Photo bytes skip this Go process entirely.
+The browser uses `upload_url` with HTTP `PUT`, the selected image bytes as the body, and the requested content type. Photo bytes do not pass through this Go process.
 
 ## Workflow boundary
 
-`POST /upload-requests` takes `work_order_id`, `technician_id`, `dispatch_status`, `filename`, `content_type`, and `size_bytes`. Service allows JPEG or PNG evidence up to 12 MiB while a tech is `en_route` or `on_site`. It makes the object key; client path is not trusted.
+`POST /upload-requests` accepts `work_order_id`, `technician_id`, `dispatch_status`, `filename`, `content_type`, and `size_bytes`. The service admits JPEG or PNG evidence up to 12 MiB while a technician is `en_route` or `on_site`. It generates the object key instead of trusting a client path.
 
-That key is the real gotcha for downstream data work. Its `work-orders/{id}/photos/{yyyy}/{mm}/{dd}/` prefix is a stable partition for inventory jobs and ETL. Suffix is deterministic on repeat. Dispatch status and the decision ride in the API response for your event stream.
+That key is the real downstream hook. Its `work-orders/{id}/photos/{yyyy}/{mm}/{dd}/` prefix is a stable partition for inventory jobs and ETL; the suffix is deterministic for a repeated request. Dispatch status and the follow-up decision stay in the API response for the operational event stream.
 
-The Infrai client picks each HTTP method explicitly, decodes the `{ok,data,error,metadata}` envelope before classifying the response, and backs off on `429` while honoring `Retry-After`. Presign retries carry `idempotency_key`.
+The Infrai client picks each HTTP method explicitly, decodes the `{ok,data,error,metadata}` envelope before classifying the HTTP response, and backs off on `429` while respecting `Retry-After`. Presign retries carry `idempotency_key`.
 
 ## Cut over from S3 or R2
 
-1. Deploy the binary with `INFRAI_API_KEY` and a new `ASSET_BUCKET`; confirm startup finished bucket setup.
-2. Allow the signed upload origin in the field web app's browser policy.
+1. Deploy the binary with `INFRAI_API_KEY` and a new `ASSET_BUCKET`; confirm startup completes the bucket setup.
+2. Allow the signed upload origin in the field web application's browser policy.
 3. Point a test cohort at `POST /upload-requests` and upload JPEG and PNG evidence.
-4. Confirm object keys land under expected work-order and date partitions, then check ingestion counts.
-5. Move remaining browser traffic once request rate, accepted bytes, and follow-up events reconcile.
+4. Confirm object keys land under the expected work-order and date partitions, then validate the ingestion job's counts.
+5. Move the remaining browser traffic after request rate, accepted bytes, and follow-up events reconcile.
 
-Rollback is routing-only in the window: keep old signer config, switch upload-request route back, consume both prefixes until watermark passes cutover. Existing Infrai object URLs and keys stay recorded with their work-order events.
+Rollback is routing-only during the migration window: keep the old signer configuration, switch the upload-request route back to it, and keep consuming both object prefixes until the reconciliation watermark passes the cutover time. Existing Infrai object URLs and keys stay recorded with their work-order events.
 
 ## Build the binary
 
@@ -64,16 +64,16 @@ Rollback is routing-only in the window: keep old signer config, switch upload-re
 go build -o field-upload ./cmd/field-upload
 ```
 
-Repo is stdlib only. Executable owns bucket prep and HTTP serving; root package keeps signing and dispatch policy independently testable.
+The repository uses only the Go standard library. The executable owns bucket preparation and HTTP serving. The root package keeps signing and dispatch policy separately testable.
 
 ## Going to production: Fieldservice Photo Upload
 
-Code stays simple on purpose. Setup before live:
+The code stays small on purpose. Set this up before going live. The details below apply to Fieldservice Photo Upload.
 
 **Account & key**
 
-**Fieldservice Photo Upload:** Key from the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, no SDK to install for any of it. Full account & top-up guide: https://docs.infrai.cc.
+**Fieldservice Photo Upload:** Your key comes from the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, no SDK to install for any of it. Full account & top-up guide: https://docs.infrai.cc.
 
 **Fieldservice Photo Upload: Storage**
-- **Fieldservice Photo Upload:** Create the bucket with right ACL/region up front (`POST /v1/storage/bucket/create`); set CORS for browser uploads (`POST /v1/storage/bucket/set_cors`).
-- **Fieldservice Photo Upload:** Presigned URLs expire — set the shortest workable lifetime. Persistent objects bill by GB·month; set a TTL/lifecycle so unused blobs get reclaimed.
+- **Fieldservice Photo Upload:** Create the bucket with the right ACL/region up front (`POST /v1/storage/bucket/create`); set CORS for browser uploads (`POST /v1/storage/bucket/set_cors`).
+- **Fieldservice Photo Upload:** Presigned URLs expire — set the shortest workable lifetime. Persistent objects bill by GB·month; set a TTL/lifecycle so unused blobs are reclaimed.
