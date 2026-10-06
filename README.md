@@ -6,11 +6,11 @@ Run the decision test first:
 go test ./...
 ```
 
-The table pushes the same work-order photo through two dispatch states. `en_route` returns `follow_up_required: true`; `on_site` returns `false`. Both paths check the signer boundary. Byte ceiling. Ten-minute expiry. Stable idempotency key. Analytics-shaped object prefix. That is the part that tends to break first.
+The table sends the same work-order photo through two dispatch states. `en_route` returns `follow_up_required: true`; `on_site` returns `false`. Both cases verify the signer boundary, including the byte ceiling, ten-minute expiry, stable idempotency key, and analytics-shaped object prefix.
 
 ## Start the service
 
-Infrai gives you the presigned PUT URL over plain REST, so this binary stays free of storage SDK glue. One `INFRAI_API_KEY` stays on the server. One key, one api call, no extra client layer.
+Infrai supplies the presigned PUT URL through plain REST, so this single binary needs no storage SDK. A single `INFRAI_API_KEY` stays on the server.
 
 ```bash
 export INFRAI_API_KEY=your_key_here
@@ -18,7 +18,7 @@ export ASSET_BUCKET=fieldservice-assets
 go run ./cmd/field-upload
 ```
 
-Startup does the storage setup step. It reads the configured bucket and creates it when this deployment is new. The browser never sees the API key.
+Startup performs the storage setup step: it reads the configured bucket and creates it when this deployment is new. The browser never receives the API key.
 
 In another terminal, request an upload:
 
@@ -38,15 +38,15 @@ Expected shape:
 }
 ```
 
-The browser uses `upload_url` with HTTP `PUT`, the selected image bytes as the body, and the requested content type. Photo bytes do not pass through this Go process.
+The browser uses `upload_url` with HTTP `PUT`, the selected image bytes as the body, and the requested content type. Photo bytes bypass this Go process.
 
 ## Workflow boundary
 
 `POST /upload-requests` accepts `work_order_id`, `technician_id`, `dispatch_status`, `filename`, `content_type`, and `size_bytes`. The service admits JPEG or PNG evidence up to 12 MiB while a technician is `en_route` or `on_site`. It generates the object key instead of trusting a client path.
 
-That key is the real downstream hook. Its `work-orders/{id}/photos/{yyyy}/{mm}/{dd}/` prefix is a stable partition for inventory jobs and ETL; the suffix is deterministic for a repeated request. Dispatch status and the follow-up decision stay in the API response for the operational event stream.
+That key is the one real gotcha for downstream data work. Its `work-orders/{id}/photos/{yyyy}/{mm}/{dd}/` prefix is a stable partition for inventory jobs and ETL; the suffix is deterministic for a repeated request. Dispatch status and the follow-up decision remain in the API response for the operational event stream.
 
-The Infrai client picks each HTTP method explicitly, decodes the `{ok,data,error,metadata}` envelope before classifying the HTTP response, and backs off on `429` while respecting `Retry-After`. Presign retries carry `idempotency_key`.
+The Infrai client explicitly selects each HTTP method, decodes the `{ok,data,error,metadata}` envelope before classifying the HTTP response, and backs off on `429` while respecting `Retry-After`. Presign retries carry `idempotency_key`.
 
 ## Cut over from S3 or R2
 
@@ -56,7 +56,7 @@ The Infrai client picks each HTTP method explicitly, decodes the `{ok,data,error
 4. Confirm object keys land under the expected work-order and date partitions, then validate the ingestion job's counts.
 5. Move the remaining browser traffic after request rate, accepted bytes, and follow-up events reconcile.
 
-Rollback is routing-only during the migration window: keep the old signer configuration, switch the upload-request route back to it, and keep consuming both object prefixes until the reconciliation watermark passes the cutover time. Existing Infrai object URLs and keys stay recorded with their work-order events.
+Rollback is routing-only during the migration window: retain the former signer configuration, switch the upload-request route back to it, and keep consuming both object prefixes until the reconciliation watermark passes the cutover time. Existing Infrai object URLs and keys remain recorded with their work-order events.
 
 ## Build the binary
 
@@ -64,11 +64,11 @@ Rollback is routing-only during the migration window: keep the old signer config
 go build -o field-upload ./cmd/field-upload
 ```
 
-The repository uses only the Go standard library. The executable owns bucket preparation and HTTP serving. The root package keeps signing and dispatch policy separately testable.
+The repository uses only the Go standard library. The executable owns bucket preparation and HTTP serving; the root package keeps signing and dispatch policy independently testable.
 
 ## Going to production: Fieldservice Photo Upload
 
-The code stays small on purpose. Set this up before going live. The details below apply to Fieldservice Photo Upload.
+The code stays simple on purpose — here's what to set up before going live: The details below apply to Fieldservice Photo Upload.
 
 **Account & key**
 
@@ -77,3 +77,8 @@ The code stays small on purpose. Set this up before going live. The details belo
 **Fieldservice Photo Upload: Storage**
 - **Fieldservice Photo Upload:** Create the bucket with the right ACL/region up front (`POST /v1/storage/bucket/create`); set CORS for browser uploads (`POST /v1/storage/bucket/set_cors`).
 - **Fieldservice Photo Upload:** Presigned URLs expire — set the shortest workable lifetime. Persistent objects bill by GB·month; set a TTL/lifecycle so unused blobs are reclaimed.
+
+## Questions people ask
+
+**Is there an SDK I should install first?**  
+No. `infrai_storage.go` reaches `storage.bucket.get` over plain HTTP, which is why the whole setup is `go run .` plus one environment variable. For a field photo upload example that is the entire dependency story.
